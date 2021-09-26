@@ -2,7 +2,6 @@
 Introduction to Boosted Trees
 #############################
 XGBoost stands for "Extreme Gradient Boosting", where the term "Gradient Boosting" originates from the paper *Greedy Function Approximation: A Gradient Boosting Machine*, by Friedman.
-This is a tutorial on gradient boosted trees, and most of the content is based on `these slides <http://homes.cs.washington.edu/~tqchen/pdf/BoostedTree.pdf>`_ by Tianqi Chen, the original author of XGBoost.
 
 The **gradient boosted trees** has been around for a while, and there are a lot of materials on the topic.
 This tutorial will explain boosted trees in a self-contained and principled way using the elements of supervised learning.
@@ -72,8 +71,7 @@ Decision Tree Ensembles
 ***********************
 Now that we have introduced the elements of supervised learning, let us get started with real trees.
 To begin with, let us first learn about the model choice of XGBoost: **decision tree ensembles**.
-The tree ensemble model consists of a set of classification and regression trees (CART). Here's a simple example of a CART
-that classifies whether someone will like computer games.
+The tree ensemble model consists of a set of classification and regression trees (CART). Here's a simple example of a CART that classifies whether someone will like a hypothetical computer game X.
 
 .. image:: https://raw.githubusercontent.com/dmlc/web-data/master/xgboost/model/cart.png
   :width: 100%
@@ -82,7 +80,7 @@ that classifies whether someone will like computer games.
 We classify the members of a family into different leaves, and assign them the score on the corresponding leaf.
 A CART is a bit different from decision trees, in which the leaf only contains decision values. In CART, a real score
 is associated with each of the leaves, which gives us richer interpretations that go beyond classification.
-This also allows for a pricipled, unified approach to optimization, as we will see in a later part of this tutorial.
+This also allows for a principled, unified approach to optimization, as we will see in a later part of this tutorial.
 
 Usually, a single tree is not strong enough to be used in practice. What is actually used is the ensemble model,
 which sums the prediction of multiple trees together.
@@ -107,7 +105,7 @@ where :math:`K` is the number of trees, :math:`f` is a function in the functiona
 
 Now here comes a trick question: what is the *model* used in random forests? Tree ensembles! So random forests and boosted trees are really the same models; the
 difference arises from how we train them. This means that, if you write a predictive service for tree ensembles, you only need to write one and it should work
-for both random forests and gradient boosted trees. (See `Treelite <http://treelite.io>`_ for an actual example.) One example of why elements of supervised learning rock.
+for both random forests and gradient boosted trees. (See `Treelite <https://treelite.readthedocs.io/en/latest/index.html>`_ for an actual example.) One example of why elements of supervised learning rock.
 
 *************
 Tree Boosting
@@ -254,6 +252,10 @@ For real valued data, we usually want to search for an optimal split. To efficie
   :alt: Schematic of choosing the best split
 
 A left to right scan is sufficient to calculate the structure score of all possible split solutions, and we can find the best split efficiently.
+
+.. note:: Limitation of additive tree learning
+
+  Since it is intractable to enumerate all possible tree structures, we add one split at a time. This approach works well most of the time, but there are some edge cases that fail due to this approach. For those edge cases, training results in a degenerate model because we consider only one feature dimension at a time. See `Can Gradient Boosting Learn Simple Arithmetic? <http://mariofilho.com/can-gradient-boosting-learn-simple-arithmetic/>`_ for an example.
 
 **********************
 Final words on XGBoost

@@ -1,186 +1,107 @@
 #!/bin/bash
 
-if [ ${TASK} == "lint" ]; then
-    make lint || exit -1
-    echo "Check documentations..."
-    make doxygen 2>log.txt
-    (cat log.txt| grep -v ENABLE_PREPROCESSING |grep -v "unsupported tag") > logclean.txt
-    echo "---------Error Log----------"
-    cat logclean.txt
-    echo "----------------------------"
-    (cat logclean.txt|grep warning) && exit -1
-    (cat logclean.txt|grep error) && exit -1
+source $HOME/miniconda/bin/activate
 
-    # Rename cuda files for static analysis
-    for file in  $(find src -name '*.cu'); do
-        cp "$file" "${file/.cu/_tmp.cc}"
-    done
+if [ ${TASK} == "python_sdist_test" ]; then
+    set -e
 
-    echo "Running clang tidy..."
-    header_filter='(xgboost\/src|xgboost\/include)'
-    for filename in $(find src -name '*.cc'); do
-	    clang-tidy $filename -header-filter=$header_filter -- -Iinclude -Idmlc-core/include -Irabit/include -std=c++11 >> logtidy.txt
-    done
+    conda activate python3
+    python --version
+    cmake --version
 
-    echo "---------clang-tidy failures----------"
-    # Fail only on warnings related to XGBoost source files
-    (cat logtidy.txt|grep -E 'xgboost.*warning'|grep -v dmlc-core) && exit -1
-    echo "----------------------------"
-    exit 0
-fi
-
-cp make/travis.mk config.mk
-make -f dmlc-core/scripts/packages.mk lz4
-
-
-if [ ${TRAVIS_OS_NAME} == "osx" ]; then
-    echo 'USE_OPENMP=0' >> config.mk
-    echo 'TMPVAR := $(XGB_PLUGINS)' >> config.mk
-    echo 'XGB_PLUGINS = $(filter-out plugin/lz4/plugin.mk, $(TMPVAR))' >> config.mk
-else
-    # use g++-4.8 for linux
-    export CXX=g++-4.8
+    make pippack
+    python -m pip install xgboost-*.tar.gz -v --user
+    python -c 'import xgboost' || exit -1
 fi
 
 if [ ${TASK} == "python_test" ]; then
-    make all || exit -1
-    echo "-------------------------------"
-    source activate python3
-    python --version
-    conda install numpy scipy pandas matplotlib nose scikit-learn
+    if grep -n -R '<<<.*>>>\(.*\)' src include | grep --invert "NOLINT"; then
+        echo 'Do not use raw CUDA execution configuration syntax with <<<blocks, threads>>>.' \
+             'try `dh::LaunchKernel`'
+        exit -1
+    fi
 
-    # Install data table from source
-    wget http://releases.llvm.org/5.0.2/clang+llvm-5.0.2-x86_64-linux-gnu-ubuntu-14.04.tar.xz
-    tar xf clang+llvm-5.0.2-x86_64-linux-gnu-ubuntu-14.04.tar.xz
-    export LLVM5=$(pwd)/clang+llvm-5.0.2-x86_64-linux-gnu-ubuntu-14.04
-    python -m pip install datatable --no-binary datatable
-
-    python -m pip install graphviz pytest pytest-cov codecov
-    python -m nose -v tests/python || exit -1
-    py.test tests/python --cov=python-package/xgboost
-    codecov
-    source activate python2
-    echo "-------------------------------"
-    python --version
-    conda install numpy scipy pandas matplotlib nose scikit-learn
-    python -m pip install graphviz
-    python -m nose -v tests/python || exit -1
-    exit 0
-fi
-
-if [ ${TASK} == "python_lightweight_test" ]; then
-    make all || exit -1
-    echo "-------------------------------"
-    source activate python3
-    python --version
-    conda install numpy scipy nose
-    python -m pip install graphviz pytest pytest-cov codecov
-    python -m nose -v tests/python || exit -1
-    py.test tests/python --cov=python-package/xgboost
-    codecov
-    source activate python2
-    echo "-------------------------------"
-    python --version
-    conda install numpy scipy nose
-    python -m pip install graphviz
-    python -m nose -v tests/python || exit -1
-    python -m pip install flake8==3.4.1
-    flake8 --ignore E501 python-package || exit -1
-    flake8 --ignore E501 tests/python || exit -1
-    exit 0
-fi
-
-if [ ${TASK} == "r_test" ]; then
     set -e
-    export _R_CHECK_TIMINGS_=0
-    export R_BUILD_ARGS="--no-build-vignettes --no-manual"
-    export R_CHECK_ARGS="--no-vignettes --no-manual"
 
-    curl -OL http://raw.github.com/craigcitro/r-travis/master/scripts/travis-tool.sh
-    chmod 755 ./travis-tool.sh
-    ./travis-tool.sh bootstrap
-    make Rpack
-    cd ./xgboost
-    ../travis-tool.sh install_deps
-    ../travis-tool.sh run_tests
-    exit 0
+
+    # Build binary wheel
+    if [ ${TRAVIS_CPU_ARCH} == "arm64" ]; then
+      # Build manylinux2014 wheel on ARM64
+      tests/ci_build/ci_build.sh aarch64 docker tests/ci_build/build_via_cmake.sh --conda-env=aarch64_test
+      tests/ci_build/ci_build.sh aarch64 docker bash -c "cd build && ctest --extra-verbose"
+      tests/ci_build/ci_build.sh aarch64 docker bash -c "cd python-package && rm -rf dist/* && python setup.py bdist_wheel --universal"
+      TAG=manylinux2014_aarch64
+      tests/ci_build/ci_build.sh aarch64 docker python tests/ci_build/rename_whl.py python-package/dist/*.whl ${TRAVIS_COMMIT} ${TAG}
+      tests/ci_build/ci_build.sh aarch64 docker auditwheel repair --plat ${TAG} python-package/dist/*.whl
+      mv -v wheelhouse/*.whl python-package/dist/
+      # Make sure that libgomp.so is vendored in the wheel
+      unzip -l python-package/dist/*.whl | grep libgomp  || exit -1
+    else
+      rm -rf build
+      mkdir build && cd build
+      conda activate python3
+      cmake --version
+      cmake .. -DUSE_OPENMP=ON -DCMAKE_VERBOSE_MAKEFILE=ON
+      make -j$(nproc)
+      cd ../python-package
+      python setup.py bdist_wheel
+      cd ..
+      TAG=macosx_10_14_x86_64.macosx_10_15_x86_64.macosx_11_0_x86_64
+      python tests/ci_build/rename_whl.py python-package/dist/*.whl ${TRAVIS_COMMIT} ${TAG}
+    fi
+
+    # Run unit tests
+    echo "------------------------------"
+    if [ ${TRAVIS_CPU_ARCH} == "arm64" ]; then
+        tests/ci_build/ci_build.sh aarch64 docker \
+          bash -c "source activate aarch64_test && python -m pip install ./python-package/dist/xgboost-*-py3-none-${TAG}.whl && python -m pytest -v -s -rxXs --durations=0 --fulltrace tests/python/test_basic.py tests/python/test_basic_models.py tests/python/test_model_compatibility.py --cov=python-package/xgboost"
+    else
+        conda env create -n cpu_test --file=tests/ci_build/conda_env/macos_cpu_test.yml
+        conda activate cpu_test
+        python -m pip install ./python-package/dist/xgboost-*-py3-none-${TAG}.whl
+        conda --version
+        python --version
+        python -m pytest -v -s -rxXs --durations=0 --fulltrace tests/python --cov=python-package/xgboost || exit -1
+    fi
+    conda activate python3
+    codecov
+
+    # Deploy binary wheel to S3
+    if [ "${TRAVIS_PULL_REQUEST}" != "false" ]
+    then
+        S3_DEST="s3://xgboost-nightly-builds/PR-${TRAVIS_PULL_REQUEST}/"
+    else
+        if [ "${TRAVIS_BRANCH}" == "master" ]
+        then
+            S3_DEST="s3://xgboost-nightly-builds/"
+        elif [ -z "${TRAVIS_TAG}" ]
+        then
+            S3_DEST="s3://xgboost-nightly-builds/${TRAVIS_BRANCH}/"
+        fi
+    fi
+    python -m awscli s3 cp python-package/dist/*.whl "${S3_DEST}" --acl public-read || true
 fi
 
 if [ ${TASK} == "java_test" ]; then
-    set -e
+    export RABIT_MOCK=ON
+    conda activate python3
     cd jvm-packages
     mvn -q clean install -DskipTests -Dmaven.test.skip
     mvn -q test
 fi
 
-if [ ${TASK} == "cmake_test" ]; then
+if [ ${TASK} == "s390x_test" ]; then
     set -e
-    # Build gtest via cmake
-    wget -nc https://github.com/google/googletest/archive/release-1.7.0.zip
-    unzip -n release-1.7.0.zip
-    mv googletest-release-1.7.0 gtest && cd gtest
-    cmake . && make
-    mkdir lib && mv libgtest.a lib
-    cd ..
-    rm -rf release-1.7.0.zip
+    python3 -m pip install --user pytest hypothesis cmake
 
-    # Build/test
+    # Build and run C++ tests
     rm -rf build
     mkdir build && cd build
-    PLUGINS="-DPLUGIN_LZ4=ON -DPLUGIN_DENSE_PARSER=ON"
-    cmake .. -DGOOGLE_TEST=ON -DGTEST_ROOT=$PWD/../gtest/ ${PLUGINS}
-    make
-    cd ..
+    cmake .. -DCMAKE_VERBOSE_MAKEFILE=ON -DGOOGLE_TEST=ON -DUSE_OPENMP=ON -DUSE_DMLC_GTEST=ON -GNinja
+    time ninja -v
     ./testxgboost
-    rm -rf build
-fi
 
-if [ ${TASK} == "cpp_test" ]; then
-    set -e
-    make -f dmlc-core/scripts/packages.mk gtest
-    echo "TEST_COVER=1" >> config.mk
-    echo "GTEST_PATH="${CACHE_PREFIX} >> config.mk
-    make cover
-fi
-
-
-if [ ${TASK} == "distributed_test" ]; then
-    set -e
-    make all || exit -1
-    echo "-------------------------------"
-    source activate python3
-    python --version
-    conda install numpy scipy
-    python -m pip install kubernetes
-    cd tests/distributed
-    ./runtests.sh
-fi
-
-if [ ${TASK} == "sanitizer_test" ]; then
-    set -e
-    # Build gtest via cmake
-    wget -nc https://github.com/google/googletest/archive/release-1.7.0.zip
-    unzip -n release-1.7.0.zip
-    mv googletest-release-1.7.0 gtest && cd gtest
-    CC=gcc-7 CXX=g++-7 cmake -DCMAKE_CXX_FLAGS="-fuse-ld=gold" \
-      -DCMAKE_C_FLAGS="-fuse-ld=gold"
-    make
-    mkdir lib && mv libgtest.a lib
+    # Run model compatibility tests
     cd ..
-    rm -rf release-1.7.0.zip
-
-    mkdir build && cd build
-    CC=gcc-7 CXX=g++-7 cmake .. -DGOOGLE_TEST=ON -DGTEST_ROOT=$PWD/../gtest/ \
-      -DUSE_SANITIZER=ON -DENABLED_SANITIZERS="address" \
-      -DCMAKE_BUILD_TYPE=Debug \
-      -DSANITIZER_PATH=/usr/lib/x86_64-linux-gnu/ \
-      -DCMAKE_CXX_FLAGS="-fuse-ld=gold" \
-      -DCMAKE_C_FLAGS="-fuse-ld=gold"
-    make
-    cd ..
-
-    export ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)
-    ASAN_OPTIONS=symbolize=1 ./testxgboost
-    rm -rf build
-    exit 0
+    PYTHONPATH=./python-package python3 -m pytest --fulltrace -v -rxXs tests/python/test_basic.py
 fi

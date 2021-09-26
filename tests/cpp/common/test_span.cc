@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-#include "../../../src/common/span.h"
+#include <xgboost/span.h>
 #include "test_span.h"
 
 namespace xgboost {
@@ -97,10 +97,6 @@ TEST(Span, FromPtrLen) {
     }
   }
 
-  {
-    EXPECT_ANY_THROW(Span<float> tmp (arr, -1););
-  }
-
   // dynamic extent
   {
     Span<float, 16> s (arr, 16);
@@ -118,6 +114,15 @@ TEST(Span, FromPtrLen) {
     for (Span<float const>::index_type i = 0; i < 16; ++i) {
       ASSERT_EQ (cs[i], arr[i]);
     }
+  }
+}
+
+TEST(SpanDeathTest, FromPtrLen) {
+  float arr[16];
+  InitializeRange(arr, arr+16);
+  {
+    auto lazy = [=]() {Span<float const, 16> tmp (arr, 5);};
+    EXPECT_DEATH(lazy(), "");
   }
 }
 
@@ -172,7 +177,7 @@ struct BaseClass {
   virtual void operator()() {}
 };
 struct DerivedClass : public BaseClass {
-  virtual void operator()() {}
+  void operator()() override {}
 };
 
 TEST(Span, FromOther) {
@@ -284,18 +289,52 @@ TEST(Span, ElementAccess) {
     ASSERT_EQ(i, arr[j]);
     ++j;
   }
+}
 
-  EXPECT_ANY_THROW(s[16]);
-  EXPECT_ANY_THROW(s[-1]);
+TEST(SpanDeathTest, ElementAccess) {
+  float arr[16];
+  InitializeRange(arr, arr + 16);
 
-  EXPECT_ANY_THROW(s(16));
-  EXPECT_ANY_THROW(s(-1));
+  Span<float> s (arr);
+  EXPECT_DEATH(s[16], "");
+  EXPECT_DEATH(s[-1], "");
+
+  EXPECT_DEATH(s(16), "");
+  EXPECT_DEATH(s(-1), "");
 }
 
 TEST(Span, Obversers) {
   int status = 1;
   TestObservers{&status}();
   ASSERT_EQ(status, 1);
+}
+
+TEST(Span, FrontBack) {
+  {
+    float arr[4] {0, 1, 2, 3};
+    Span<float, 4> s(arr);
+    ASSERT_EQ(s.front(), 0);
+    ASSERT_EQ(s.back(), 3);
+  }
+  {
+    std::vector<double> arr {0, 1, 2, 3};
+    Span<double> s(arr);
+    ASSERT_EQ(s.front(), 0);
+    ASSERT_EQ(s.back(), 3);
+  }
+}
+
+TEST(SpanDeathTest, FrontBack) {
+  {
+    Span<float, 0> s;
+    EXPECT_DEATH(s.front(), "");
+    EXPECT_DEATH(s.back(), "");
+  }
+  {
+    Span<float> s;
+    EXPECT_DEATH(s.front(), "");
+    EXPECT_DEATH(s.back(), "");
+  }
 }
 
 TEST(Span, FirstLast) {
@@ -313,10 +352,6 @@ TEST(Span, FirstLast) {
     for (size_t i = 0; i < first.size(); ++i) {
       ASSERT_EQ(first[i], arr[i]);
     }
-
-    EXPECT_ANY_THROW(s.first<-1>());
-    EXPECT_ANY_THROW(s.first<17>());
-    EXPECT_ANY_THROW(s.first<32>());
   }
 
   {
@@ -332,10 +367,6 @@ TEST(Span, FirstLast) {
     for (size_t i = 0; i < last.size(); ++i) {
       ASSERT_EQ(last[i], arr[i+12]);
     }
-
-    EXPECT_ANY_THROW(s.last<-1>());
-    EXPECT_ANY_THROW(s.last<17>());
-    EXPECT_ANY_THROW(s.last<32>());
   }
 
   // dynamic extent
@@ -351,10 +382,6 @@ TEST(Span, FirstLast) {
     for (size_t i = 0; i < first.size(); ++i) {
       ASSERT_EQ(first[i], s[i]);
     }
-
-    EXPECT_ANY_THROW(s.first(-1));
-    EXPECT_ANY_THROW(s.first(17));
-    EXPECT_ANY_THROW(s.first(32));
 
     delete [] arr;
   }
@@ -372,9 +399,53 @@ TEST(Span, FirstLast) {
       ASSERT_EQ(s[12 + i], last[i]);
     }
 
-    EXPECT_ANY_THROW(s.last(-1));
-    EXPECT_ANY_THROW(s.last(17));
-    EXPECT_ANY_THROW(s.last(32));
+    delete [] arr;
+  }
+}
+
+TEST(SpanDeathTest, FirstLast) {
+  // static extent
+  {
+    float arr[16];
+    InitializeRange(arr, arr + 16);
+
+    Span<float> s (arr);
+    auto constexpr kOne = static_cast<Span<float, 4>::index_type>(-1);
+    EXPECT_DEATH(s.first<kOne>(), "");
+    EXPECT_DEATH(s.first<17>(), "");
+    EXPECT_DEATH(s.first<32>(), "");
+  }
+
+  {
+    float arr[16];
+    InitializeRange(arr, arr + 16);
+
+    Span<float> s (arr);
+    auto constexpr kOne = static_cast<Span<float, 4>::index_type>(-1);
+    EXPECT_DEATH(s.last<kOne>(), "");
+    EXPECT_DEATH(s.last<17>(), "");
+    EXPECT_DEATH(s.last<32>(), "");
+  }
+
+  // dynamic extent
+  {
+    float *arr = new float[16];
+    InitializeRange(arr, arr + 16);
+    Span<float> s (arr, 16);
+    EXPECT_DEATH(s.first(-1), "");
+    EXPECT_DEATH(s.first(17), "");
+    EXPECT_DEATH(s.first(32), "");
+
+    delete [] arr;
+  }
+
+  {
+    float *arr = new float[16];
+    InitializeRange(arr, arr + 16);
+    Span<float> s (arr, 16);
+    EXPECT_DEATH(s.last(-1), "");
+    EXPECT_DEATH(s.last(17), "");
+    EXPECT_DEATH(s.last(32), "");
 
     delete [] arr;
   }
@@ -393,12 +464,17 @@ TEST(Span, Subspan) {
   auto s4 = s1.subspan(2, dynamic_extent);
   ASSERT_EQ(s1.data() + 2, s4.data());
   ASSERT_EQ(s4.size(), s1.size() - 2);
+}
 
-  EXPECT_ANY_THROW(s1.subspan(-1, 0));
-  EXPECT_ANY_THROW(s1.subspan(16, 0));
+TEST(SpanDeathTest, Subspan) {
+  int arr[16] {0};
+  Span<int> s1 (arr);
+  EXPECT_DEATH(s1.subspan(-1, 0), "");
+  EXPECT_DEATH(s1.subspan(17, 0), "");
 
-  EXPECT_ANY_THROW(s1.subspan<-1>());
-  EXPECT_ANY_THROW(s1.subspan<16>());
+  auto constexpr kOne = static_cast<Span<int, 4>::index_type>(-1);
+  EXPECT_DEATH(s1.subspan<kOne>(), "");
+  EXPECT_DEATH(s1.subspan<17>(), "");
 }
 
 TEST(Span, Compare) {
@@ -417,6 +493,37 @@ TEST(Span, AsWritableBytes) {
   int status = 1;
   TestAsWritableBytes{&status}();
   ASSERT_EQ(status, 1);
+}
+
+TEST(Span, Empty) {
+  {
+    Span<float> s {nullptr, static_cast<Span<float>::index_type>(0)};
+    auto res = s.subspan(0);
+    ASSERT_EQ(res.data(), nullptr);
+    ASSERT_EQ(res.size(), 0);
+
+    res = s.subspan(0, 0);
+    ASSERT_EQ(res.data(), nullptr);
+    ASSERT_EQ(res.size(), 0);
+  }
+
+  {
+    Span<float, 0> s {nullptr, static_cast<Span<float>::index_type>(0)};
+    auto res = s.subspan(0);
+    ASSERT_EQ(res.data(), nullptr);
+    ASSERT_EQ(res.size(), 0);
+
+    res = s.subspan(0, 0);
+    ASSERT_EQ(res.data(), nullptr);
+    ASSERT_EQ(res.size(), 0);
+  }
+}
+
+TEST(SpanDeathTest, Empty) {
+  std::vector<float> data(1, 0);
+  ASSERT_TRUE(data.data());
+  Span<float> s{data.data(), Span<float>::index_type(0)};  // ok to define 0 size span.
+  EXPECT_DEATH(s[0], "");  // not ok to use it.
 }
 
 }  // namespace common

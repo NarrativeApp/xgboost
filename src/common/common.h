@@ -8,13 +8,17 @@
 
 #include <xgboost/base.h>
 #include <xgboost/logging.h>
+#include <xgboost/span.h>
 
+#include <algorithm>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <type_traits>
 #include <vector>
 #include <string>
 #include <sstream>
+#include <numeric>
 
 #if defined(__CUDACC__)
 #include <thrust/system/cuda/error.h>
@@ -26,7 +30,7 @@
 
 #define WITH_CUDA() false
 
-#endif
+#endif  // defined(__CUDACC__)
 
 namespace dh {
 #if defined(__CUDACC__)
@@ -44,14 +48,14 @@ inline cudaError_t ThrowOnCudaError(cudaError_t code, const char *file,
   }
   return code;
 }
-#endif
+#endif  // defined(__CUDACC__)
 }  // namespace dh
 
 namespace xgboost {
 namespace common {
 /*!
  * \brief Split a string by delimiter
- * \param s String to be splitted.
+ * \param s String to be split.
  * \param delim The delimiter.
  */
 inline std::vector<std::string> Split(const std::string& s, char delim) {
@@ -64,12 +68,22 @@ inline std::vector<std::string> Split(const std::string& s, char delim) {
   return ret;
 }
 
+template <typename T>
+XGBOOST_DEVICE T Max(T a, T b) {
+  return a < b ? b : a;
+}
+
 // simple routine to convert any data to string
 template<typename T>
 inline std::string ToString(const T& data) {
   std::ostringstream os;
   os << data;
   return os.str();
+}
+
+template <typename T1, typename T2>
+XGBOOST_DEVICE T1 DivRoundUp(const T1 a, const T2 b) {
+  return static_cast<T1>(std::ceil(static_cast<double>(a) / b));
 }
 
 /*
@@ -108,7 +122,7 @@ class Range {
     XGBOOST_DEVICE explicit Iterator(DifferenceType start, DifferenceType step) :
         i_{start}, step_{step} {}
 
-   public:
+   private:
     int64_t i_;
     DifferenceType step_ = 1;
   };
@@ -136,88 +150,30 @@ class Range {
   Iterator end_;
 };
 
+int AllVisibleGPUs();
+
+inline void AssertGPUSupport() {
+#ifndef XGBOOST_USE_CUDA
+    LOG(FATAL) << "XGBoost version not compiled with GPU support.";
+#endif  // XGBOOST_USE_CUDA
+}
+
+inline void AssertOneAPISupport() {
+#ifndef XGBOOST_USE_ONEAPI
+    LOG(FATAL) << "XGBoost version not compiled with OneAPI support.";
+#endif  // XGBOOST_USE_ONEAPI
+}
+
+template <typename Idx, typename Container,
+          typename V = typename Container::value_type,
+          typename Comp = std::less<V>>
+std::vector<Idx> ArgSort(Container const &array, Comp comp = std::less<V>{}) {
+  std::vector<Idx> result(array.size());
+  std::iota(result.begin(), result.end(), 0);
+  auto op = [&array, comp](Idx const &l, Idx const &r) { return comp(array[l], array[r]); };
+  XGBOOST_PARALLEL_STABLE_SORT(result.begin(), result.end(), op);
+  return result;
+}
 }  // namespace common
-struct AllVisibleImpl {
-  static int AllVisible();
-};
-/* \brief set of devices across which HostDeviceVector can be distributed.
- *
- * Currently implemented as a range, but can be changed later to something else,
- *   e.g. a bitset
- */
-class GPUSet {
- public:
-  explicit GPUSet(int start = 0, int ndevices = 0)
-      : devices_(start, start + ndevices) {}
-
-  static GPUSet Empty() { return GPUSet(); }
-
-  static GPUSet Range(int start, int ndevices) {
-    return ndevices <= 0 ? Empty() : GPUSet{start, ndevices};
-  }
-  /*! \brief ndevices and num_rows both are upper bounds. */
-  static GPUSet All(int ndevices, int num_rows = std::numeric_limits<int>::max()) {
-    int n_devices_visible = AllVisible().Size();
-    if (ndevices < 0 || ndevices >  n_devices_visible) {
-      ndevices = n_devices_visible;
-    }
-    // fix-up device number to be limited by number of rows
-    ndevices = ndevices > num_rows ? num_rows : ndevices;
-    return Range(0, ndevices);
-  }
-  static GPUSet AllVisible() {
-    int n =  AllVisibleImpl::AllVisible();
-    return Range(0, n);
-  }
-  /*! \brief Ensure gpu_id is correct, so not dependent upon user knowing details */
-  static int GetDeviceIdx(int gpu_id) {
-    auto devices = AllVisible();
-    CHECK(!devices.IsEmpty()) << "Empty device.";
-    return (std::abs(gpu_id) + 0) % devices.Size();
-  }
-  /*! \brief Counting from gpu_id */
-  GPUSet Normalised(int gpu_id) const {
-    return Range(gpu_id, Size());
-  }
-  /*! \brief Counting from 0 */
-  GPUSet Unnormalised() const {
-    return Range(0, Size());
-  }
-
-  int Size() const {
-    int res = *devices_.end() - *devices_.begin();
-    return res < 0 ? 0 : res;
-  }
-  /*! \brief Get normalised device id. */
-  int operator[](int index) const {
-    CHECK(index >= 0 && index < Size());
-    return *devices_.begin() + index;
-  }
-
-  bool IsEmpty() const { return Size() == 0; }
-  /*! \brief Get un-normalised index. */
-  int Index(int device) const {
-    CHECK(Contains(device));
-    return device - *devices_.begin();
-  }
-
-  bool Contains(int device) const {
-    return *devices_.begin() <= device && device < *devices_.end();
-  }
-
-  common::Range::Iterator begin() const { return devices_.begin(); }  // NOLINT
-  common::Range::Iterator end() const { return devices_.end(); }      // NOLINT
-
-  friend bool operator==(const GPUSet& lhs, const GPUSet& rhs) {
-    return lhs.devices_ == rhs.devices_;
-  }
-  friend bool operator!=(const GPUSet& lhs, const GPUSet& rhs) {
-    return !(lhs == rhs);
-  }
-
- private:
-  common::Range devices_;
-};
-
 }  // namespace xgboost
 #endif  // XGBOOST_COMMON_COMMON_H_

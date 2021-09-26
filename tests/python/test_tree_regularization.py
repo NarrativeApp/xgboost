@@ -1,5 +1,4 @@
 import numpy as np
-import unittest
 import xgboost as xgb
 
 from numpy.testing import assert_approx_equal
@@ -7,10 +6,11 @@ from numpy.testing import assert_approx_equal
 train_data = xgb.DMatrix(np.array([[1]]), label=np.array([1]))
 
 
-class TestTreeRegularization(unittest.TestCase):
+class TestTreeRegularization:
     def test_alpha(self):
         params = {
-            'tree_method': 'exact', 'silent': 1, 'objective': 'reg:linear',
+            'tree_method': 'exact', 'verbosity': 0,
+            'objective': 'reg:squarederror',
             'eta': 1,
             'lambda': 0,
             'alpha': 0.1
@@ -27,7 +27,8 @@ class TestTreeRegularization(unittest.TestCase):
 
     def test_lambda(self):
         params = {
-            'tree_method': 'exact', 'silent': 1, 'objective': 'reg:linear',
+            'tree_method': 'exact', 'verbosity': 0,
+            'objective': 'reg:squarederror',
             'eta': 1,
             'lambda': 1,
             'alpha': 0
@@ -44,7 +45,8 @@ class TestTreeRegularization(unittest.TestCase):
 
     def test_alpha_and_lambda(self):
         params = {
-            'tree_method': 'exact', 'silent': 1, 'objective': 'reg:linear',
+            'tree_method': 'exact', 'verbosity': 1,
+            'objective': 'reg:squarederror',
             'eta': 1,
             'lambda': 1,
             'alpha': 0.1

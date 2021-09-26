@@ -1,5 +1,5 @@
 /*!
- * Copyright by Contributors 2017
+ * Copyright by Contributors 2017-2019
  */
 #pragma once
 #include <xgboost/logging.h>
@@ -7,11 +7,12 @@
 #include <iostream>
 #include <map>
 #include <string>
-
-#include "common.h"
+#include <utility>
+#include <vector>
 
 namespace xgboost {
 namespace common {
+
 struct Timer {
   using ClockT = std::chrono::high_resolution_clock;
   using TimePointT = std::chrono::high_resolution_clock::time_point;
@@ -43,49 +44,42 @@ struct Timer {
  * \brief Timing utility used to measure total method execution time over the
  * lifetime of the containing object.
  */
-
 struct Monitor {
-  bool debug_verbose = false;
-  std::string label = "";
-  std::map<std::string, Timer> timer_map;
-  Timer self_timer;
+ private:
+  struct Statistics {
+    Timer timer;
+    size_t count{0};
+    uint64_t nvtx_id;
+  };
 
-  Monitor() { self_timer.Start(); }
+  // from left to right, <name <count, elapsed>>
+  using StatMap = std::map<std::string, std::pair<size_t, size_t>>;
 
+  std::string label_ = "";
+  std::map<std::string, Statistics> statistics_map_;
+  Timer self_timer_;
+
+  void PrintStatistics(StatMap const& statistics) const;
+
+ public:
+  Monitor() { self_timer_.Start(); }
+  /*\brief Print statistics info during destruction.
+   *
+   * Please note that this may not work, as with distributed frameworks like Dask, the
+   * model is pickled to other workers, and the global parameters like `global_verbosity_`
+   * are not included in the pickle.
+   */
   ~Monitor() {
-    if (!debug_verbose) return;
+    this->Print();
+    self_timer_.Stop();
+  }
 
-    LOG(CONSOLE) << "======== Monitor: " << label << " ========";
-    for (auto &kv : timer_map) {
-      kv.second.PrintElapsed(kv.first);
-    }
-    self_timer.Stop();
-    self_timer.PrintElapsed(label + " Lifetime");
-  }
-  void Init(std::string label, bool debug_verbose) {
-    this->debug_verbose = debug_verbose;
-    this->label = label;
-  }
-  void Start(const std::string &name) { timer_map[name].Start(); }
-  void Start(const std::string &name, GPUSet devices) {
-    if (debug_verbose) {
-#ifdef __CUDACC__
-#include "device_helpers.cuh"
-      dh::SynchronizeNDevices(devices);
-#endif
-    }
-    timer_map[name].Start();
-  }
-  void Stop(const std::string &name) { timer_map[name].Stop(); }
-  void Stop(const std::string &name, GPUSet devices) {
-    if (debug_verbose) {
-#ifdef __CUDACC__
-#include "device_helpers.cuh"
-      dh::SynchronizeNDevices(devices);
-#endif
-    }
-    timer_map[name].Stop();
-  }
+  /*! \brief Print all the statistics. */
+  void Print() const;
+
+  void Init(std::string label) { this->label_ = label; }
+  void Start(const std::string &name);
+  void Stop(const std::string &name);
 };
 }  // namespace common
 }  // namespace xgboost

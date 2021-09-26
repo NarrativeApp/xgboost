@@ -5,39 +5,30 @@
 namespace xgboost {
 namespace common {
 
-// Test here is multi gpu specific
-TEST(Transform, MGPU_Basic) {
-  auto devices = GPUSet::AllVisible();
-  CHECK_GT(devices.Size(), 1);
+TEST(Transform, MGPU_SpecifiedGpuId) {  // NOLINT
+  if (AllVisibleGPUs() < 2) {
+    LOG(WARNING) << "Not testing in multi-gpu environment.";
+    return;
+  }
+  // Use 1 GPU, Numbering of GPU starts from 1
+  auto device = 1;
   const size_t size {256};
   std::vector<bst_float> h_in(size);
   std::vector<bst_float> h_out(size);
-  InitializeRange(h_in.begin(), h_in.end());
+  std::iota(h_in.begin(), h_in.end(), 0);
   std::vector<bst_float> h_sol(size);
-  InitializeRange(h_sol.begin(), h_sol.end());
+  std::iota(h_sol.begin(), h_sol.end(), 0);
 
-  const HostDeviceVector<bst_float> in_vec {h_in,
-        GPUDistribution::Block(GPUSet::Empty())};
-  HostDeviceVector<bst_float> out_vec {h_out,
-        GPUDistribution::Block(GPUSet::Empty())};
-  out_vec.Fill(0);
+  const HostDeviceVector<bst_float> in_vec {h_in, device};
+  HostDeviceVector<bst_float> out_vec {h_out, device};
 
-  in_vec.Reshard(GPUDistribution::Granular(devices, 8));
-  out_vec.Reshard(GPUDistribution::Block(devices));
-
-  // Granularity is different, resharding will throw.
-  EXPECT_ANY_THROW(
-      Transform<>::Init(TestTransformRange<bst_float>{}, Range{0, size}, devices)
+  ASSERT_NO_THROW(
+      Transform<>::Init(TestTransformRange<bst_float>{}, Range{0, size}, device)
       .Eval(&out_vec, &in_vec));
-
-
-  Transform<>::Init(TestTransformRange<bst_float>{}, Range{0, size},
-                    devices, false).Eval(&out_vec, &in_vec);
   std::vector<bst_float> res = out_vec.HostVector();
-
   ASSERT_TRUE(std::equal(h_sol.begin(), h_sol.end(), res.begin()));
 }
 
-}  // namespace xgboost
 }  // namespace common
+}  // namespace xgboost
 #endif
